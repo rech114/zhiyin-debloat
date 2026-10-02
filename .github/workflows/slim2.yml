@@ -1,0 +1,270 @@
+name: slim2
+
+# ③④ 摘除广告 SDK 类 (26,118 个)。
+#
+# 安全策略: 先建静态闸门, 再动刀。
+#   1) 空壳化 com.hzhj.openads —— App 靠它引用广告 SDK 类型, 类名必须留着,
+#      否则 HJAdManager / HJSplashAdHelper 的字段类型会悬空, 直接链接失败。
+#   2) 删掉真正的广告 SDK 类。
+#   3) classrefcheck 断言: 没有任何存活类的 superclass / 接口 / 字段类型 /
+#      方法签名指向已删除的类 —— 不通过就整个 job FAIL, 不产出包。
+#
+# 全程不用 apktool (它会重编 resources.arsc 导致装不上), Manifest 走二进制定点手术。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/slim2.yml'
+      - 'tools/**'
+      - 'patch/**'
+      - 'base/**'
+
+env:
+  # 注意: 必须写成单行。用 YAML 折叠(>-)会把换行变成空格, 混进 classpath 里
+  #       (tools/xxx.jar :tools/yyy.jar), java -cp 被空格切开后整个 classpath 失效。
+  SMALI_CP: tools/smali-3.0.10.jar:tools/smali-dexlib2-3.0.10.jar:tools/smali-util-3.0.10.jar:tools/smali-baksmali-3.0.10.jar:tools/guava.jar:tools/jcommander.jar:tools/antlr-runtime.jar
+  AD_DIRS: >-
+    com/kwad com/byazt com/bytedance com/pangle com/baidu/mobads com/sigmob
+    com/mobads com/beizi com/octopus com/ss/android ms/bz/bd com/yxcorp com/octet
+  AD_LIBS: >-
+    libPglbizssdk_ml libpanglearmor libpangleflipped libtobEmbedEncrypt
+    libplt-base libti-monitor liboctopus libsgcore libcommonV2DevInfo
+
+jobs:
+  slim2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 拆包 + 8 个 dex 全量反汇编
+        run: |
+          set -eux
+          mkdir -p work/orig_dex work/smali
+          unzip -o -q base/test.apk 'classes*.dex' -d work/orig_dex
+          # 并行跑, 但逐个 wait 拿到真实退出码 —— 裸 wait 在 bash 里恒返回 0,
+          # 会把 baksmali 的失败全部吞掉 (踩过)。
+          pids=()
+          for d in work/orig_dex/classes*.dex; do
+            n=$(basename "$d" .dex)
+            java -cp "$SMALI_CP" com.android.tools.smali.baksmali.Main \
+              d "$d" -o "work/smali/$n" &
+            pids+=($!)
+          done
+          rc=0
+          for p in "${pids[@]}"; do wait "$p" || rc=1; done
+          [ "$rc" = 0 ] || { echo "★ baksmali 失败"; exit 1; }
+          for d in work/smali/*/; do echo "  $d $(find $d -name '*.smali' | wc -l) 文件"; done
+
+      - name: 记录"删类前"的类名快照
+        run: |
+          set -eux
+          python3 tools/classrefcheck.py --dump-names work/before.txt --before work/smali/*
+
+      # ---- 全部版本相关的改动都在这里, classes7 之外的 7 个 dex 完全靠通用规则处理 ----
+      # 作者出新版时, 只需替换 base/test.apk 然后 push; 补丁锚点若因改名而失配,
+      # --strict 会直接让整个 job 失败, 不会静默产出"门禁还活着"的包。
+      - name: 打去变现补丁 (classes7, --strict)
+        run: |
+          set -eux
+          python3 patch/apply.py work/smali/classes7 --strict
+          # 类型闸门: smali 汇编器只查语法不查类型, 寄存器类型错要到运行期才炸 (VerifyError)。
+          # 只查 com/apertus 下**我们自己写**的类。
+          # 不查作者原有类: 该检查器不做跨分支的类型合并, 在原代码 (大量 if/循环) 上会
+          # 产生大量误报 —— 实测 MusicActivity 报 22 处, 全是假阳性。
+          python3 tools/smali_typecheck.py work/smali/classes7/com/apertus
+          # 守卫极性闸门: if-eqz/if-nez 写反不会崩, 而是整段逻辑被静默跳过 (真踩过)。
+          # 同样只查我们自己写的类。
+          python3 tools/smali_guard_audit.py work/smali/classes7/com/apertus
+          # 另做一份"带探针"的 classes7, 用于 slim2dbg 变体:
+          # 日志会写到 Android/data/<包名>/files/debug.log (路径由 getExternalFilesDir 解析)
+          mkdir -p work/smali_dbg
+          cp -r work/smali/classes7 work/smali_dbg/classes7
+          mkdir -p work/smali_dbg/classes7/dbg
+          cp patch/Dbg.smali patch/DbgCrash.smali work/smali_dbg/classes7/dbg/
+          python3 patch/apply_probes.py work/smali_dbg/classes7
+
+      - name: ③ 空壳化 com.hzhj.openads (必须在删 SDK 之前)
+        run: python3 tools/stub_openads.py work/smali/*
+
+      - name: ④ 删除广告 SDK 类
+        run: |
+          set -eux
+          for d in work/smali/*/; do
+            for p in $AD_DIRS; do rm -rf "$d/$p"; done
+          done
+          echo "初删后剩余: $(find work/smali -name '*.smali' | wc -l) 个文件"
+
+      - name: ④b 传递闭包剪枝 (作者把部分广告包装混在 com/hzhj/libs 里, 列举法必漏)
+        run: |
+          set -eux
+          python3 tools/prune_transitive.py --before-names work/before.txt \
+            $(for d in work/smali/*/; do echo --root "$d"; done)
+          echo "剪枝后剩余: $(find work/smali -name '*.smali' | wc -l) 个文件"
+
+      - name: ★ 静态闸门 classrefcheck
+        run: |
+          set -eux
+          python3 tools/classrefcheck.py \
+            --before-names work/before.txt --after work/smali/*
+
+      - name: 重新组装 dex
+        run: |
+          set -eux
+          mkdir -p work/new_dex work/dex_dbg
+          # 串行组装。之前 9 个 JVM 并行 * -Xmx4g = 36GB 堆, 直接把 runner 打爆
+          # (日志末尾 "The operation was canceled"), 这里改成逐个跑 + 3g 堆。
+          for d in work/smali/*/; do
+            n=$(basename "$d")
+            java -Xmx3g -cp "$SMALI_CP" com.android.tools.smali.smali.Main \
+              assemble "$d" -o "work/new_dex/$n.dex"
+          done
+          # 带探针版的 classes7
+          java -Xmx3g -cp "$SMALI_CP" com.android.tools.smali.smali.Main \
+            assemble work/smali_dbg/classes7 -o work/dex_dbg/classes7.dex
+          ls -la work/new_dex/ work/dex_dbg/
+          for f in work/new_dex/*.dex work/dex_dbg/*.dex; do
+            printf "  %s class_defs=%s\n" "$f" \
+              "$(od -A n -t u4 -j 96 -N 4 "$f" | tr -d ' ')"
+          done
+
+      - name: 优化首页快捷入口图标 (换 Material 图标 + 放大尺寸)
+        run: |
+          set -eux
+          # 只改属性的 4 字节值, 文件长度不变, 不碰 resources.arsc
+          OUT=$(python3 tools/axml_patch.py base/test.apk \
+            --find-by 0x7f0801ee,0x7f080233,0x7f080221,0x7f0801c5 \
+            --icon 0x7f0801ee=0x7f0801bc \
+            --icon 0x7f080233=0x7f080232 \
+            --icon 0x7f080221=0x7f08026a \
+            --icon 0x7f0801c5=0x7f080247 \
+            --dim iconSize=0x1401=0x2001 \
+            --dim layout_width=0x3401=0x4401 \
+            --dim layout_height=0x3401=0x4401 \
+            -o work/layout_patched.xml --print-entry)
+          echo "$OUT"
+          ENTRY=$(echo "$OUT" | sed -n 's/^ENTRY=//p')
+          [ -n "$ENTRY" ] || { echo "★ 图标补丁未命中"; exit 1; }
+          echo "PATCHED_LAYOUT=$ENTRY" >> "$GITHUB_ENV"
+
+      - name: 品牌替换 (图标 + 应用名 -> Apertus)
+        run: |
+          # pipefail 必须开: 否则 "python | tee" 的退出码取 tee 的, 脚本崩了也不报错
+          set -euxo pipefail
+          pip install --quiet pillow
+          python3 tools/make_branding.py --apk base/test.apk --icon base/icon.png \
+            --outdir work/branding --rename "只音=Apertus" --package com.apertus.music 2>&1 | tee work/branding.log
+          grep '^--set ' work/branding.log | tr '\n' ' ' > work/branding.args
+          # 预期 10 密度图标 + 4 开屏 logo 引用 + 1 arsc = 15 条。
+          # 少于 13 条说明品牌替换没生效, 直接失败, 绝不静默出包 (踩过: PIL 缺失导致 0 条)
+          n=$(grep -c '^--set ' work/branding.log)
+          [ "$n" -ge 15 ] || { echo "★ 品牌替换只产出 $n 条参数, 预期 15"; exit 1; }
+          echo "品牌替换条目数: $n (预期 15)"
+
+      - name: 二进制 Manifest 手术 + 重打包
+        run: |
+          set -eux
+          mkdir -p out/signed work/am
+          unzip -o -q base/test.apk AndroidManifest.xml -d work/am
+          python3 tools/axml_strip.py work/am/AndroidManifest.xml
+          # 改包名: manifest 的 package 属性 + 所有 getPackageName() 派生的字符串
+          # (authorities / DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION 等, 漏改会在
+          #  注册动态广播时抛 SecurityException)
+          python3 tools/arsc_rename.py work/am/AndroidManifest.xml \
+            --replace-prefix "com.app.yxcds.zy.yz=com.apertus.music" \
+            -o work/am/AndroidManifest.xml
+
+          DROPS=""
+          for L in $AD_LIBS; do DROPS="$DROPS --drop lib/*/$L.so"; done
+          DROPS="$DROPS --drop assets/bdxadsdk.jar --drop assets/gdt_plugin/gdtadv2.jar"
+          DROPS="$DROPS --drop META-INF/CERT.SF --drop META-INF/CERT.RSA --drop META-INF/MANIFEST.MF"
+          SETS=""
+          for f in work/new_dex/*.dex; do SETS="$SETS --set $(basename $f)=$f"; done
+          # slim2: 纯干净交付版 (无任何日志代码)
+          python3 tools/repack.py base/test.apk out/slim2-unsigned.apk \
+            --set AndroidManifest.xml=work/am/AndroidManifest.xml \
+            --set "$PATCHED_LAYOUT=work/layout_patched.xml" \
+            $(cat work/branding.args) $SETS $DROPS
+          # slim2dbg: 仅 classes7 换成带探针版, 其余完全一致; 同签名可互相覆盖安装
+          SETS_DBG=$(echo "$SETS" | sed 's|classes7.dex=work/new_dex/classes7.dex|classes7.dex=work/dex_dbg/classes7.dex|')
+          python3 tools/repack.py base/test.apk out/slim2dbg-unsigned.apk \
+            --set AndroidManifest.xml=work/am/AndroidManifest.xml \
+            --set "$PATCHED_LAYOUT=work/layout_patched.xml" \
+            $(cat work/branding.args) $SETS_DBG $DROPS
+
+      - name: 对齐 + 签名
+        run: |
+          set -eux
+          java -jar tools/uber-apk-signer-1.3.0.jar \
+            -a out/slim2-unsigned.apk out/slim2dbg-unsigned.apk -o out/signed \
+            --ks keystore/zhiyin.jks --ksAlias zhiyin \
+            --ksPass zhiyin2026 --ksKeyPass zhiyin2026 --verbose
+
+      - name: 装 Android 官方工具
+        run: |
+          set -eux
+          curl -sSLo /tmp/cmdline.zip \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          mkdir -p /tmp/sdk/cmdline-tools/latest
+          unzip -q /tmp/cmdline.zip -d /tmp/sdk/cmdline-tools/tmp
+          mv /tmp/sdk/cmdline-tools/tmp/cmdline-tools/* /tmp/sdk/cmdline-tools/latest/
+          rm -rf /tmp/sdk/cmdline-tools/tmp
+          export PATH="/tmp/sdk/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --install "build-tools;34.0.0" > /dev/null 2>&1 || true
+
+      - name: ★ 多重校验 (zip / aapt2 / apkanalyzer / 对齐签名 / manifest 引用)
+        run: |
+          set -eux
+          AAPT2=$(find /tmp/sdk/build-tools -name aapt2 | head -1)
+          export PATH="/tmp/sdk/cmdline-tools/latest/bin:$PATH"
+
+          for APK in out/signed/slim2-aligned-signed.apk out/signed/slim2dbg-aligned-signed.apk; do
+            echo "================ $(basename $APK)"
+
+            echo "--- 1) zip 结构完整性"
+            unzip -tqq "$APK" && echo "  zip: OK"
+
+            echo "--- 2) aapt2 dump badging (Android 自家解析)"
+            "$AAPT2" dump badging "$APK" > /tmp/b.txt
+            grep -E "^(package|sdkVersion|targetSdkVersion|application-label|launchable-activity)" /tmp/b.txt | sed 's/^/    /'
+
+            echo "--- 3) apkanalyzer manifest print"
+            apkanalyzer manifest print "$APK" > /tmp/m.txt && echo "  apkanalyzer: OK"
+
+            echo "--- 4) 对齐 / 压缩 / 签名 / manifest 引用完整性"
+            python3 tools/apkcheck.py "$APK"
+          done
+
+          echo "--- 5) dex 头部合法性"
+          for f in work/new_dex/*.dex work/dex_dbg/*.dex; do
+            od -A n -t x1 -N 8 "$f" | tr -d ' \n' | grep -q "6465780a" || { echo "  ★ $f 不是合法 dex"; exit 1; }
+          done
+          echo "  全部 dex 头部合法"
+
+          echo "--- 6) slim2 必须完全不含日志类"
+          if unzip -p out/signed/slim2-aligned-signed.apk classes7.dex | grep -q "Ldbg/Dbg;"; then
+            echo "  ★ slim2 里混进了日志类"; exit 1
+          fi
+          echo "  slim2 无 Ldbg/Dbg; OK"
+
+          echo "--- 7) slim2dbg 必须含日志类"
+          unzip -p out/signed/slim2dbg-aligned-signed.apk classes7.dex | grep -q "Ldbg/Dbg;" \
+            && echo "  slim2dbg 含 Ldbg/Dbg; OK" || { echo "  ★ slim2dbg 缺日志类"; exit 1; }
+
+      - name: 体积对比
+        run: |
+          set -eux
+          echo "原始: $(stat -c %s base/test.apk) 字节"
+          echo "slim2: $(stat -c %s out/signed/slim2-aligned-signed.apk) 字节"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zhiyin-slim2
+          path: out/signed/*.apk
+          if-no-files-found: error
+          retention-days: 7

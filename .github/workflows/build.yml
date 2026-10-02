@@ -1,0 +1,129 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  AD_LIBS: >-
+    libPglbizssdk_ml libpanglearmor libpangleflipped libtobEmbedEncrypt
+    libplt-base libti-monitor liboctopus libsgcore libcommonV2DevInfo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # verify: 只换 classes7.dex, 其余条目原样搬运 (已知可装的基线)
+      - name: verify
+        run: |
+          set -eux
+          mkdir -p out/signed
+          python3 tools/repack.py base/test.apk out/verify-unsigned.apk \
+            --set classes7.dex=dexs/classes7-verify.dex \
+            --drop META-INF/CERT.SF \
+            --drop META-INF/CERT.RSA \
+            --drop META-INF/MANIFEST.MF
+
+      # slim / slimdbg: 二进制 Manifest 定点手术 + 删广告 so/jar
+      # 不用 apktool —— 它会重编 resources.arsc, 产出 "Package info is null"。
+      # axml_strip 只动元素流字节, 字符串池/资源表/arsc 全部原样保留,
+      # 并且会连带摘掉 target 指向已删组件的 <activity-alias> (否则
+      # INSTALL_PARSE_FAILED_MANIFEST_MALFORMED)。
+      - name: slim / slimdbg
+        run: |
+          set -eux
+          DROPS=""
+          for L in $AD_LIBS; do DROPS="$DROPS --drop lib/*/$L.so"; done
+          DROPS="$DROPS --drop assets/bdxadsdk.jar --drop assets/gdt_plugin/gdtadv2.jar"
+          DROPS="$DROPS --drop META-INF/CERT.SF --drop META-INF/CERT.RSA --drop META-INF/MANIFEST.MF"
+
+          for v in slim slimdbg; do
+            rm -rf /tmp/am_$v && mkdir -p /tmp/am_$v
+            unzip -o -q base/test.apk AndroidManifest.xml -d /tmp/am_$v
+            python3 tools/axml_strip.py /tmp/am_$v/AndroidManifest.xml
+            python3 tools/repack.py base/test.apk out/$v-unsigned.apk \
+              --set AndroidManifest.xml=/tmp/am_$v/AndroidManifest.xml \
+              --set classes7.dex=dexs/classes7-$v.dex \
+              $DROPS
+          done
+
+      - name: 对齐 + 签名
+        run: |
+          set -eux
+          java -jar tools/uber-apk-signer-1.3.0.jar \
+            -a out/verify-unsigned.apk out/slim-unsigned.apk out/slimdbg-unsigned.apk \
+            -o out/signed \
+            --ks keystore/zhiyin.jks --ksAlias zhiyin \
+            --ksPass zhiyin2026 --ksKeyPass zhiyin2026 --verbose
+
+      - name: 装 Android 官方工具 (aapt2 / apkanalyzer)
+        run: |
+          set -eux
+          curl -sSLo /tmp/cmdline.zip \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          mkdir -p /tmp/sdk/cmdline-tools/latest
+          unzip -q /tmp/cmdline.zip -d /tmp/sdk/cmdline-tools/tmp
+          mv /tmp/sdk/cmdline-tools/tmp/cmdline-tools/* /tmp/sdk/cmdline-tools/latest/
+          rm -rf /tmp/sdk/cmdline-tools/tmp
+          export PATH="/tmp/sdk/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --install "build-tools;34.0.0" > /dev/null 2>&1 || true
+          find /tmp/sdk -name aapt2 -o -name apkanalyzer | head -5
+
+      # Android 自家工具的校验 == PackageParser 同源, 比 apktool/androguard 权威
+      - name: ★ 用 aapt2 / apkanalyzer 自检 (装不上的话会在这里暴露)
+        run: |
+          set -eux
+          AAPT2=$(find /tmp/sdk/build-tools -name aapt2 | head -1)
+          export PATH="/tmp/sdk/cmdline-tools/latest/bin:$PATH"
+          rc=0
+          for f in out/signed/*.apk; do
+            echo "===== $(basename $f)"
+            if "$AAPT2" dump badging "$f" > /tmp/badging.txt 2>/tmp/badging.err; then
+              echo "  aapt2 dump badging : OK"
+              grep -E "^(package|application-label|launchable-activity|sdkVersion|targetSdkVersion|native-code)" /tmp/badging.txt | head -8 | sed 's/^/    /'
+            else
+              echo "  ★aapt2 dump badging : FAILED"
+              cat /tmp/badging.err | head -20 | sed 's/^/    /'
+              rc=1
+            fi
+            if apkanalyzer manifest print "$f" > /tmp/manifest_$(basename $f).txt 2>/tmp/apkan.err; then
+              echo "  apkanalyzer        : OK"
+            else
+              echo "  ★apkanalyzer       : FAILED"
+              cat /tmp/apkan.err | head -20 | sed 's/^/    /'
+              rc=1
+            fi
+          done
+          exit $rc
+
+      - name: 上传 manifest 文本供人工比对
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-dump
+          path: /tmp/manifest_*.txt
+          if-no-files-found: ignore
+
+      - name: 验收 (对齐 / 压缩 / 签名 / manifest 引用完整性)
+        run: |
+          set -eux
+          ls -la out/signed
+          python3 tools/apkcheck.py out/signed/*.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zhiyin-slim
+          path: |
+            out/signed/verify-aligned-signed.apk
+            out/signed/slim-aligned-signed.apk
+            out/signed/slimdbg-aligned-signed.apk
+          if-no-files-found: error
+          retention-days: 7
