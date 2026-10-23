@@ -34,6 +34,8 @@ env:
 
 jobs:
   slim2:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -269,9 +271,27 @@ jobs:
           echo "原始: $(stat -c %s base/test.apk) 字节"
           echo "slim2: $(stat -c %s out/signed/slim2-aligned-signed.apk) 字节"
 
+      # 产物上传设为非致命: GitHub 的 Actions 产物配额是**滞后统计**的
+      # (官方提示 "Usage is recalculated every 6-12 hours"), 配额满时不该让
+      # 已经通过全部校验的构建判失败。真正的交付走下面的 Release。
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: zhiyin-slim2
           path: out/signed/*.apk
-          if-no-files-found: error
-          retention-days: 7
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: 发布产物到 Release (实时构建)
+        run: |
+          set -eux
+          TAG=latest-build
+          TITLE="最新构建 ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --notes "由 slim2 工作流自动覆盖更新。源码提交: $GITHUB_SHA"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --notes "由 slim2 工作流自动覆盖更新。源码提交: $GITHUB_SHA"
+          fi
+          gh release upload "$TAG" out/signed/*.apk --clobber --repo "$GITHUB_REPOSITORY"
