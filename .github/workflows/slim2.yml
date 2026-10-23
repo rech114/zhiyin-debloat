@@ -283,6 +283,10 @@ jobs:
           retention-days: 3
 
       - name: 发布产物到 Release (实时构建)
+        env:
+          # gh CLI 在 Actions 里必须显式给 token, 否则报
+          # "To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable"
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eux
           TAG=latest-build
