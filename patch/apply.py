@@ -130,30 +130,24 @@ PATCHES = [
     dict(kind="drop",
          name="去掉强更弹窗 (MusicActivity)",
          file="com/zhiyin/music/MusicActivity.smali",
-         listener_regs="v1, v5", dialog_reg="v1"),
+         listener_regs="v1, v4", dialog_reg="v1"),
 
     # 「关于」页里的"欢迎加入软件官方交流群"卡片 (@id/ql)。
-    # 只做两件事: initActivity 的 .registers 6 -> 7 (腾一个临时寄存器 v4),
     # 拿到卡片后立刻 setVisibility(GONE)。不碰布局资源, 不动点击逻辑。
-    dict(kind="text",
-         name="匿名交流群卡片: 扩容寄存器 (AboutActivity)",
-         file="com/zhiyin/toolbox/activity/AboutActivity.smali",
-         old=".method public initActivity(Landroid/os/Bundle;)V\n    .registers 6",
-         new=".method public initActivity(Landroid/os/Bundle;)V\n    .registers 7"),
-
+    #
+    # 锚点只取"绑定行"本身 —— 不再带 .line 行号和后面的监听器类名。
+    # 这两样每次发版都会变: 3.6.0 -> 3.7.0 时类名从 ᛱᛱᛳᛶᛴ/ᛱᛱᛱᛱᛷ 变成了
+    # ᛱᛱᛳᛸᲀ/ᛱᛱᛱᛱᛷ, .line 号也整体后移, 锚点因此失配。
+    # v4 在 initActivity 里本来是空闲的 (.registers 6, 只用到 v0-v3), 不用扩容。
     dict(kind="text",
          name="去掉官方交流群卡片 (AboutActivity)",
          file="com/zhiyin/toolbox/activity/AboutActivity.smali",
          old="    iget-object p1, p1, Lcom/zhiyin/toolbox/databinding/ActivityAboutBinding;->"
-             "ql:Lcom/google/android/material/card/MaterialCardView;\n"
-             "\n    .line 289\n    .line 290\n"
-             "    new-instance v0, Lcom/hzhj/libs/ᛱᛱᛳᛶᛴ/ᛱᛱᛱᛱᛷ;\n",
+             "ql:Lcom/google/android/material/card/MaterialCardView;",
          new="    iget-object p1, p1, Lcom/zhiyin/toolbox/databinding/ActivityAboutBinding;->"
              "ql:Lcom/google/android/material/card/MaterialCardView;\n"
              "\n    const/16 v4, 0x8\n\n"
-             "    invoke-virtual {p1, v4}, Landroid/view/View;->setVisibility(I)V\n"
-             "\n    .line 289\n    .line 290\n"
-             "    new-instance v0, Lcom/hzhj/libs/ᛱᛱᛳᛶᛴ/ᛱᛱᛱᛱᛷ;\n"),
+             "    invoke-virtual {p1, v4}, Landroid/view/View;->setVisibility(I)V"),
 
     # ---------------------------------------------------------------- 补丁: 首页轮播引流 Banner
     # 首页顶部轮播的数据源是服务端下发的 musicBanners, 第 0 项就是「官方交流群」
@@ -273,13 +267,6 @@ NEW_OUTER = (OLD_OUTER
              + "    invoke-static {v0, p1}, Lcom/apertus/ApertusApi;->sanitize"
              + "(Landroid/content/Context;Lcom/zhiyin/toolbox/bean/AppConfigBean;)V")
 
-HOOK_OLD = '    invoke-direct {v1, p0}, Lcom/hzhj/libs/ᛱᛱᛳᛴᛶ/ᛱᛱᛱᛳᲁ;-><init>(Lcom/zhiyin/music/MusicActivity;)V'
-HOOK_NEW = (HOOK_OLD
-            + "\n\n    new-instance v2, Lcom/apertus/AqQuality;\n\n"
-            + "    invoke-direct {v2}, Lcom/apertus/AqQuality;-><init>()V\n\n"
-            + "    invoke-virtual {v0, v2}, Landroid/view/View;->"
-            + "setOnLongClickListener(Landroid/view/View$OnLongClickListener;)V")
-
 QUALITY_CLASS = dict(
     name="新增音质选择类 AqQuality",
     kind="file",
@@ -302,6 +289,14 @@ QUALITY_APPLY = dict(
 # 长按音量按钮 -> 音质选择。
 # 挂在 sound 按钮上: 它的单击已经给了音量面板, 长按是空着的。
 # 用 v2 而不是 v1 —— v1 这时正握着单击监听器, 覆盖它会连带把单击也换掉。
+HOOK_OLD = '    iget-object v0, v0, Lcom/zhiyin/toolbox/databinding/ContentMusicSheetBinding;->sound:Lcom/google/android/material/button/MaterialButton;'
+HOOK_NEW = (HOOK_OLD
+            + "\n\n    new-instance v2, Lcom/apertus/AqQuality;\n\n"
+            # v2 空闲 (initViews 只用到 v0/v1), 不覆盖 v1 上已挂好的单击监听器
+            + "    invoke-direct {v2}, Lcom/apertus/AqQuality;-><init>()V\n\n"
+            + "    invoke-virtual {v0, v2}, Landroid/view/View;->"
+            + "setOnLongClickListener(Landroid/view/View$OnLongClickListener;)V")
+
 QUALITY_HOOK = dict(
     name="长按音量按钮打开音质选择",
     kind="text",
@@ -375,7 +370,9 @@ PATCHES = PATCHES + [QUALITY_CLASS, QUALITY_APPLY, QUALITY_HOOK]
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("root", type=Path)
+    ap.add_argument("root", type=Path, nargs="+",
+                    help="一个或多个 smali 根目录 (按顺序找)。"
+                         "作者会重新分配类到不同 dex, 所以不写死单个根")
     ap.add_argument("--strict", action="store_true",
                     help="任一补丁未命中就返回非零 —— 防止锚点失配时静默产出"
                          "'门禁还活着'的包。作者更新版本后必须开这个。")
@@ -383,13 +380,19 @@ def main() -> int:
 
     skipped = []
     for p in PATCHES:
-        path = args.root / p["file"]
+        path = None
+        for r in args.root:
+            cand = r / p["file"]
+            if cand.exists():
+                path = cand
+                break
         if p["kind"] == "file":
+            path = args.root[0] / p["file"]
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(HANDLERS["file"]("", p), encoding="utf-8")
             print(f"OK    {p['name']} -> {p['file']} (新增类)")
             continue
-        if not path.exists():
+        if path is None or not path.exists():
             print(f"SKIP  {p['name']}: 文件不存在")
             skipped.append(p["name"])
             continue

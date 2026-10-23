@@ -136,10 +136,10 @@ def main() -> int:
     ap.add_argument("--outdir", type=Path, required=True)
     ap.add_argument("--rename", action="append", default=[])
     ap.add_argument("--package", help="新包名 (写进 resources.arsc 的 ResTable_package 字段)")
-    ap.add_argument("--launcher-id", default="0x7f100016")
-    ap.add_argument("--round-id", default="0x7f100017")
-    ap.add_argument("--foreground-id", default="0x7f0801ac")
-    ap.add_argument("--legacy-logo-id", default="0x7f0801a9")   # drawable/ic_icon
+    ap.add_argument("--launcher-id", default="0x7f10001d")
+    ap.add_argument("--round-id", default="0x7f10001e")
+    ap.add_argument("--foreground-id", default="0x7f0801d0")
+    ap.add_argument("--legacy-logo-id", default="0x7f0801cd")   # drawable/ic_icon
     args = ap.parse_args()
 
     from PIL import Image, ImageDraw

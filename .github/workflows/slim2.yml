@@ -30,7 +30,7 @@ env:
     com/mobads com/beizi com/octopus com/ss/android ms/bz/bd com/yxcorp com/octet
   AD_LIBS: >-
     libPglbizssdk_ml libpanglearmor libpangleflipped libtobEmbedEncrypt
-    libplt-base libti-monitor liboctopus libsgcore libcommonV2DevInfo
+    libplt-base libti-monitor liboctopus libsgcore libBZDevInfo
 
 jobs:
   slim2:
@@ -72,7 +72,14 @@ jobs:
       - name: 打去变现补丁 (classes7, --strict)
         run: |
           set -eux
-          python3 patch/apply.py work/smali/classes7 --strict
+          # 作者会重新分配类到不同 dex (3.7.0 就把 MusicActivity 挪到了 classes5),
+          # 所以把所有树都交给补丁器; classes7 放第一位 —— 新增类统一落在那里。
+          ROOTS="work/smali/classes7"
+          for d in work/smali/classes*/; do
+            n=$(basename "$d")
+            [ "$n" = "classes7" ] || ROOTS="$ROOTS $d"
+          done
+          python3 patch/apply.py $ROOTS --strict
           # 类型闸门: smali 汇编器只查语法不查类型, 寄存器类型错要到运行期才炸 (VerifyError)。
           # 只查 com/apertus 下**我们自己写**的类。
           # 不查作者原有类: 该检查器不做跨分支的类型合并, 在原代码 (大量 if/循环) 上会
@@ -138,11 +145,11 @@ jobs:
           set -eux
           # 只改属性的 4 字节值, 文件长度不变, 不碰 resources.arsc
           OUT=$(python3 tools/axml_patch.py base/test.apk \
-            --find-by 0x7f0801ee,0x7f080233,0x7f080221,0x7f0801c5 \
-            --icon 0x7f0801ee=0x7f0801bc \
-            --icon 0x7f080233=0x7f080232 \
-            --icon 0x7f080221=0x7f08026a \
-            --icon 0x7f0801c5=0x7f080247 \
+            --find-by 0x7f080212,0x7f080257,0x7f080245,0x7f0801e9 \
+            --icon 0x7f080212=0x7f0801e0 \
+            --icon 0x7f080257=0x7f080256 \
+            --icon 0x7f080245=0x7f08028e \
+            --icon 0x7f0801e9=0x7f08026b \
             --dim iconSize=0x1401=0x2001 \
             --dim layout_width=0x3401=0x4401 \
             --dim layout_height=0x3401=0x4401 \
