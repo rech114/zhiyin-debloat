@@ -401,6 +401,8 @@ def main() -> int:
     ap.add_argument("root", type=Path, nargs="+",
                     help="一个或多个 smali 根目录 (按顺序找)。"
                          "作者会重新分配类到不同 dex, 所以不写死单个根")
+    ap.add_argument("--touched-out", type=Path,
+                    help="把本次改过的文件路径(绝对)写到这个文件, 供后续闸门做针对性检查")
     ap.add_argument("--strict", action="store_true",
                     help="任一补丁未命中就返回非零 —— 防止锚点失配时静默产出"
                          "'门禁还活着'的包。作者更新版本后必须开这个。")
@@ -417,6 +419,7 @@ def main() -> int:
         return 1
 
     skipped = []
+    touched = []
     for p in PATCHES:
         path = None
         for r in args.root:
@@ -428,6 +431,7 @@ def main() -> int:
             path = args.root[0] / p["file"]
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(HANDLERS["file"]("", p), encoding="utf-8")
+            touched.append(str(path.resolve()))
             print(f"OK    {p['name']} -> {p['file']} (新增类)")
             continue
         if path is None or not path.exists():
@@ -441,7 +445,12 @@ def main() -> int:
             skipped.append(p["name"])
             continue
         path.write_text(out, encoding="utf-8")
+        touched.append(str(path.resolve()))
         print(f"OK    {p['name']} -> {p['file']}")
+
+    if args.touched_out:
+        args.touched_out.write_text("\n".join(touched) + "\n", encoding="utf-8")
+        print(f"改动的文件: {len(touched)} 个 -> {args.touched_out}")
 
     if skipped and args.strict:
         print(f"\n★ {len(skipped)} 个补丁未命中, --strict 模式判定失败:")

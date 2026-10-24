@@ -90,6 +90,22 @@ jobs:
           # 守卫极性闸门: if-eqz/if-nez 写反不会崩, 而是整段逻辑被静默跳过 (真踩过)。
           # 同样只查我们自己写的类。
           python3 tools/smali_guard_audit.py work/smali/classes5/com/apertus work/smali/classes7/com/apertus
+          # 寄存器越界闸门: 抓"把参数寄存器(p0/this)当局部变量用"。
+          # 真实案例: AboutActivity 写 const/16 v4 而 v4 就是 p0=this,
+          # 汇编不报错, 打开关于页直接 VerifyError。
+          # 类引用闸门: 抓"补丁引用了不存在的类"。
+          # 真实案例: 作者改名工具启动器类, 补丁写死旧名 -> 工具页 NoClassDefFoundError。
+          # 两者都只查 apply.py 改过的文件 + 我们新增的 com/apertus ——
+          # 作者原有代码不在范围内 (可能有历史遗留的死引用)。
+          mapfile -t TOUCHED < work/touched.txt
+          echo "闸门覆盖 ${#TOUCHED[@]} 个改动文件"
+          python3 tools/smali_regcheck.py \
+            work/smali/classes5/com/apertus work/smali/classes7/com/apertus \
+            "${TOUCHED[@]}"
+          python3 tools/smali_refcheck.py \
+            --roots work/smali/classes* \
+            --check work/smali/classes5/com/apertus work/smali/classes7/com/apertus \
+            "${TOUCHED[@]}"
           # 另做一份"带探针"的 classes7, 用于 slim2dbg 变体:
           # 日志会写到 Android/data/<包名>/files/debug.log (路径由 getExternalFilesDir 解析)
           mkdir -p work/smali_dbg
