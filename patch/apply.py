@@ -451,5 +451,37 @@ def main() -> int:
     return 0
 
 
+# ================================================================ 补丁 17
+# 把「所有文件访问」(MANAGE_EXTERNAL_STORAGE) 的申请降级成普通存储权限。
+# 背景: 权限声明已被摘掉, 但代码仍在申请 -> 用户被引导到系统设置页, 而开关是灰的、
+# 永远开不了 (声明不存在)。作者的对话框文案本来写的就是「储存权限」, 换成
+# READ_EXTERNAL_STORAGE 语义一致, 也不再出现打不开的开关。
+# 只改 App 自身 4 处调用, 权限库内部的实现不动。
+STORAGE_DOWNGRADE = [
+    dict(kind="text",
+         name="存储权限降级(播放器-授权回调)",
+         file="com/zhiyin/music/MusicActivity$5.smali",
+         old='    invoke-static {}, Lcom/hzhj/libs/ᛱᛱᛲᲀᛵ/ᛱᛱᛱᛱᛲ;->ᛱᛱᛱᛱᛷ()Lcom/hjq/permissions/permission/base/IPermission;',
+         new='    invoke-static {}, Lcom/hzhj/libs/ᛱᛱᛲᲀᛵ/ᛱᛱᛱᛱᛲ;->ᛱᛱᛱᛱᤝ()Lcom/hjq/permissions/permission/base/IPermission;'),
+    dict(kind="text",
+         name="存储权限降级(播放器-预检查)",
+         file="com/zhiyin/music/MusicActivity.smali",
+         old='    invoke-static {}, Lcom/hzhj/libs/ᛱᛱᛲᲀᛵ/ᛱᛱᛱᛱᛲ;->ᛱᛱᛱᛱᛷ()Lcom/hjq/permissions/permission/base/IPermission;',
+         new='    invoke-static {}, Lcom/hzhj/libs/ᛱᛱᛲᲀᛵ/ᛱᛱᛱᛱᛲ;->ᛱᛱᛱᛱᤝ()Lcom/hjq/permissions/permission/base/IPermission;'),
+    dict(kind="text",
+         name="存储权限降级(工具箱首页-预检查)",
+         file="com/zhiyin/toolbox/MainActivity.smali",
+         old='    invoke-static {}, Lcom/hzhj/libs/ᛱᛱᛲᲀᛵ/ᛱᛱᛱᛱᛲ;->ᛱᛱᛱᛱᛷ()Lcom/hjq/permissions/permission/base/IPermission;',
+         new='    invoke-static {}, Lcom/hzhj/libs/ᛱᛱᛲᲀᛵ/ᛱᛱᛱᛱᛲ;->ᛱᛱᛱᛱᤝ()Lcom/hjq/permissions/permission/base/IPermission;'),
+    dict(kind="text",
+         name="存储权限降级(工具箱首页-授权回调)",
+         file="com/zhiyin/toolbox/MainActivity$3.smali",
+         old='    invoke-static {}, Lcom/hzhj/libs/ᛱᛱᛲᲀᛵ/ᛱᛱᛱᛱᛲ;->ᛱᛱᛱᛱᛷ()Lcom/hjq/permissions/permission/base/IPermission;',
+         new='    invoke-static {}, Lcom/hzhj/libs/ᛱᛱᛲᲀᛵ/ᛱᛱᛱᛱᛲ;->ᛱᛱᛱᛱᤝ()Lcom/hjq/permissions/permission/base/IPermission;'),
+]
+
+PATCHES = PATCHES + STORAGE_DOWNGRADE
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
