@@ -86,10 +86,10 @@ jobs:
           # 只查 com/apertus 下**我们自己写**的类。
           # 不查作者原有类: 该检查器不做跨分支的类型合并, 在原代码 (大量 if/循环) 上会
           # 产生大量误报 —— 实测 MusicActivity 报 22 处, 全是假阳性。
-          python3 tools/smali_typecheck.py work/smali/classes7/com/apertus
+          python3 tools/smali_typecheck.py work/smali/classes5/com/apertus work/smali/classes7/com/apertus
           # 守卫极性闸门: if-eqz/if-nez 写反不会崩, 而是整段逻辑被静默跳过 (真踩过)。
           # 同样只查我们自己写的类。
-          python3 tools/smali_guard_audit.py work/smali/classes7/com/apertus
+          python3 tools/smali_guard_audit.py work/smali/classes5/com/apertus work/smali/classes7/com/apertus
           # 另做一份"带探针"的 classes7, 用于 slim2dbg 变体:
           # 日志会写到 Android/data/<包名>/files/debug.log (路径由 getExternalFilesDir 解析)
           mkdir -p work/smali_dbg

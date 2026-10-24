@@ -28,9 +28,9 @@ GATE_BYPASS = """.method public static ᛱᛱᛱᛱᛲ(Landroid/content/Context;
 
     if-eqz p0, :debloat_ret
 
-    new-instance v1, Lcom/hzhj/libs/ᛱᛱᛳᛷᛱ/ᛱᛱᛱᛵᤞ;
+    new-instance v1, __RUN__
 
-    invoke-direct {v1, p0, p1}, Lcom/hzhj/libs/ᛱᛱᛳᛷᛱ/ᛱᛱᛱᛵᤞ;-><init>(Landroid/content/Context;Lcom/zhiyin/toolbox/bean/tool/FunctionItem;)V
+    invoke-direct {v1, p0, p1}, __RUN__-><init>(Landroid/content/Context;Lcom/zhiyin/toolbox/bean/tool/FunctionItem;)V
 
     invoke-interface {v1}, Ljava/lang/Runnable;->run()V
 
@@ -268,8 +268,8 @@ NEW_OUTER = (OLD_OUTER
              + "\n\n    iget-object v0, p0, Lcom/zhiyin/toolbox/activity/FirstActivity$1;->"
              + 'ᛱᛱᛱᛱᛱ'
              + ":Lcom/zhiyin/toolbox/activity/FirstActivity;\n\n"
-             + "    invoke-static {v0, p1}, Lcom/apertus/AqQuality;->apply"
-             + "(Landroid/content/Context;Lcom/zhiyin/toolbox/bean/AppConfigBean;)V\n\n"
+             # 音质选择已由新版 App 自带, 这里不再改写 level
+             + ""
              # 同一处顺带中和强更: 把 latestVersion 换成运行期版本, 各界面都不用再拆弹窗
              + "    invoke-static {v0, p1}, Lcom/apertus/ApertusConfig;->sanitize"
              + "(Landroid/content/Context;Lcom/zhiyin/toolbox/bean/AppConfigBean;)V\n\n"
@@ -288,7 +288,7 @@ QUALITY_CLASS = dict(
 # 配置刚刚解析完、还没被任何地方读到的时候, 把本地档位套进去。
 # FirstActivity$1 持有外部 FirstActivity, 正好当 Context 用。
 QUALITY_APPLY = dict(
-    name="配置解析后套用本地音质档位",
+    name="配置解析后: 中和强更 + 接口兜底",
     kind="text",
     file="com/zhiyin/toolbox/activity/FirstActivity$1.smali",
     old=OLD_OUTER,
@@ -376,7 +376,25 @@ PATCHES = PATCHES + [API_FALLBACK]
 
 PATCHES = PATCHES + [CFG_CLASS2, CFG_SAVE, CFG_FAILOVER]
 
-PATCHES = PATCHES + [QUALITY_CLASS, QUALITY_APPLY, QUALITY_HOOK]
+PATCHES = PATCHES + [QUALITY_APPLY]
+
+
+def derive_gate_class(roots):
+    """从原始 ToolAdHelper 里读出"工具启动器"的类名。
+
+    为什么不用写死的: 这个类是作者混淆产物, 每次发版都会换 (3.6.0 是
+    ᛱᛱᛳᛷᛱ/ᛱᛱᛱᛵᤞ, 3.7.0 变成 ᛱᛱᛳᤝᛸ/ᛱᛱᛱᛵᤞ)。写死会导致补丁"打上了"但类不存在,
+    运行时 NoClassDefFoundError —— 工具页一点就崩 (真踩过)。
+    """
+    for r in roots:
+        f = r / "com/zhiyin/toolbox/utils/ToolAdHelper.smali"
+        if not f.exists():
+            continue
+        m = re.search(r'new-instance v1, (Lcom/hzhj/libs/[^;\s]+;)', f.read_text(encoding="utf-8"))
+        if m:
+            return m.group(1)
+    return None
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -387,6 +405,16 @@ def main() -> int:
                     help="任一补丁未命中就返回非零 —— 防止锚点失配时静默产出"
                          "'门禁还活着'的包。作者更新版本后必须开这个。")
     args = ap.parse_args()
+
+    run_cls = derive_gate_class(args.root)
+    if run_cls:
+        for pp in PATCHES:
+            if isinstance(pp.get("body"), str) and "__RUN__" in pp["body"]:
+                pp["body"] = pp["body"].replace("__RUN__", run_cls)
+        print(f"工具启动器类: {run_cls}")
+    elif any("__RUN__" in (pp.get("body") or "") for pp in PATCHES):
+        print("★ 未能从 ToolAdHelper 推出启动器类名")
+        return 1
 
     skipped = []
     for p in PATCHES:

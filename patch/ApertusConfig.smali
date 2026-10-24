@@ -116,8 +116,6 @@
 
     sput-object v1, Lcom/zhiyin/toolbox/activity/FirstActivity;->config:Lcom/zhiyin/toolbox/bean/AppConfigBean;
 
-    invoke-static {p0, v1}, Lcom/apertus/AqQuality;->apply(Landroid/content/Context;Lcom/zhiyin/toolbox/bean/AppConfigBean;)V
-
     invoke-static {p0, v1}, Lcom/apertus/ApertusConfig;->sanitize(Landroid/content/Context;Lcom/zhiyin/toolbox/bean/AppConfigBean;)V
 
     new-instance v2, Landroid/content/Intent;

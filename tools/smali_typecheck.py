@@ -227,7 +227,10 @@ def main() -> int:
     files = []
     for p in a.paths:
         pp = Path(p)
-        files.extend(sorted(pp.rglob("*.smali")) if pp.is_dir() else [pp])
+        if pp.is_dir():
+            files.extend(sorted(pp.rglob("*.smali")))
+        elif pp.exists():
+            files.append(pp)
 
     problems = []
     for f in files:
