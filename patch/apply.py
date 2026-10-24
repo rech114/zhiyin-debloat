@@ -133,12 +133,22 @@ PATCHES = [
          listener_regs="v1, v4", dialog_reg="v1"),
 
     # 「关于」页里的"欢迎加入软件官方交流群"卡片 (@id/ql)。
+    # 必须先扩容寄存器: initActivity 是 .registers 6, 而它有**两个**参数寄存器 ——
+    # p0=this(v4) / p1=Bundle(v5), 局部只有 v0-v3, 全都占满了。
+    # 直接往 v4 写会把 this 覆盖成 int, 后面 p0 还要当 AboutActivity 用 (建监听器、
+    # 取 BaseActivity.binding), 校验器会以类型不符拒绝整个 AboutActivity。
+    # 6 -> 7 之后 v4 才是真正的局部寄存器。
+    dict(kind="text",
+         name="交流群卡片: 扩容寄存器 (AboutActivity)",
+         file="com/zhiyin/toolbox/activity/AboutActivity.smali",
+         old=".method public initActivity(Landroid/os/Bundle;)V\n    .registers 6",
+         new=".method public initActivity(Landroid/os/Bundle;)V\n    .registers 7"),
+
     # 拿到卡片后立刻 setVisibility(GONE)。不碰布局资源, 不动点击逻辑。
     #
     # 锚点只取"绑定行"本身 —— 不再带 .line 行号和后面的监听器类名。
     # 这两样每次发版都会变: 3.6.0 -> 3.7.0 时类名从 ᛱᛱᛳᛶᛴ/ᛱᛱᛱᛱᛷ 变成了
     # ᛱᛱᛳᛸᲀ/ᛱᛱᛱᛱᛷ, .line 号也整体后移, 锚点因此失配。
-    # v4 在 initActivity 里本来是空闲的 (.registers 6, 只用到 v0-v3), 不用扩容。
     dict(kind="text",
          name="去掉官方交流群卡片 (AboutActivity)",
          file="com/zhiyin/toolbox/activity/AboutActivity.smali",
