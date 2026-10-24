@@ -180,7 +180,27 @@ jobs:
           set -eux
           mkdir -p out/signed work/am
           unzip -o -q base/test.apk AndroidManifest.xml -d work/am
-          python3 tools/axml_strip.py work/am/AndroidManifest.xml
+          # 权限最小化: 摘掉广告/追踪类权限声明。只删声明, 不碰字符串池。
+          python3 tools/axml_strip.py work/am/AndroidManifest.xml \
+            --drop-permission android.permission.SYSTEM_ALERT_WINDOW \
+            --drop-permission android.permission.MANAGE_EXTERNAL_STORAGE \
+            --drop-permission android.permission.QUERY_ALL_PACKAGES \
+            --drop-permission android.permission.REQUEST_INSTALL_PACKAGES \
+            --drop-permission android.permission.REQUEST_DELETE_PACKAGES \
+            --drop-permission android.permission.READ_PHONE_STATE \
+            --drop-permission android.permission.ACCESS_COARSE_LOCATION \
+            --drop-permission android.permission.ACCESS_FINE_LOCATION \
+            --drop-permission android.permission.ACCESS_MEDIA_LOCATION \
+            --drop-permission android.permission.GET_TASKS \
+            --drop-permission android.permission.REORDER_TASKS \
+            --drop-permission android.permission.EXPAND_STATUS_BAR \
+            --drop-permission android.permission.CHANGE_WIFI_STATE \
+            --drop-permission android.permission.CHANGE_WIFI_MULTICAST_STATE \
+            --drop-permission android.permission.CHANGE_NETWORK_STATE \
+            --drop-permission android.permissio.WRITE_EXTERNAL_STORAGE \
+            --drop-permission com.asus.msa.SupplementaryDID.ACCESS \
+            --drop-permission com.app.yxcds.zy.yz.openadsdk.permission.TT_PANGOLIN \
+            --drop-permission com.app.yxcds.zy.yz.permission.KW_SDK_BROADCAST
           # 改包名: manifest 的 package 属性 + 所有 getPackageName() 派生的字符串
           # (authorities / DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION 等, 漏改会在
           #  注册动态广播时抛 SecurityException)

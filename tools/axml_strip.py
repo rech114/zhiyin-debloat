@@ -102,6 +102,9 @@ def main() -> int:
     ap.add_argument("manifest", type=Path)
     ap.add_argument("-o", "--out", type=Path)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--drop-permission", action="append", default=[],
+                    help="要摘除的 uses-permission 名字 (可重复)。"
+                         "只在元素流里删声明, 不碰字符串池。")
     args = ap.parse_args()
 
     data = args.manifest.read_bytes()
@@ -126,6 +129,16 @@ def main() -> int:
         return bool(v) and v.startswith(AD_PREFIXES)
 
     kill = set()
+
+    # 第一步之前: 按名单摘除 uses-permission。
+    # 只删 manifest 里的声明 —— 这样系统在安装时就不会把它列给用户,
+    # 也不会在运行期弹出授权框。App 代码若调用需要该权限的 API, 会直接拿到
+    # 拒绝 (SecurityException 或被 try 捕获), 而不是"静默拿到权限"。
+    if args.drop_permission:
+        want = set(args.drop_permission)
+        for i, (tag, _s, _e, attrs) in enumerate(elems):
+            if tag == "uses-permission" and attrs.get("name") in want:
+                kill.add(i)
 
     # 第一步: 类名本身就是广告 SDK 的组件
     for i, (tag, _s, _e, attrs) in enumerate(elems):
