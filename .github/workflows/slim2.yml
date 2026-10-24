@@ -81,7 +81,7 @@ jobs:
             n=$(basename "$d")
             [ "$n" = "classes7" ] || ROOTS="$ROOTS $d"
           done
-          python3 patch/apply.py $ROOTS --strict
+          python3 patch/apply.py $ROOTS --strict --touched-out work/touched.txt
           # 类型闸门: smali 汇编器只查语法不查类型, 寄存器类型错要到运行期才炸 (VerifyError)。
           # 只查 com/apertus 下**我们自己写**的类。
           # 不查作者原有类: 该检查器不做跨分支的类型合并, 在原代码 (大量 if/循环) 上会
